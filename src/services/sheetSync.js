@@ -173,12 +173,21 @@ async function deleteSubmissionRow(submission) {
   })
 }
 
-// Account Onboarded is normally a manual column the implementation team fills in by hand — but
-// once a multi-location account has been onboarded once, every location added to that group
-// afterward should immediately show CLOSED too rather than starting blank, so this writes
-// directly into that one cell for a specific new row.
-async function setAccountOnboarded(submission, value) {
+const MANUAL_FIELD_COLUMN_INDEX = {
+  accountOnboarded: ACCOUNT_ONBOARDED_COLUMN_INDEX,
+  configurationStatus: CONFIGURATION_STATUS_COLUMN_INDEX,
+  implementationSpecialist: IMPLEMENTATION_SPECIALIST_COLUMN_INDEX,
+}
+
+// Account Onboarded / Configuration Status / Implementation Specialist are normally manual columns
+// the implementation team fills in by hand directly in the sheet — but the app itself is now also a
+// valid way to set them (via the specialist/QA queues, or account-onboarded inheritance for grouped
+// locations), so those writes need to land in the sheet cell too, not just Mongo. Otherwise the next
+// read prefers the sheet's still-blank value and silently reverts the app's own change.
+async function setManualField(submission, field, value) {
   if (!isConfigured()) return
+  const columnIndex = MANUAL_FIELD_COLUMN_INDEX[field]
+  if (columnIndex === undefined) return
 
   const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID
   const sheets = getClient()
@@ -189,11 +198,13 @@ async function setAccountOnboarded(submission, value) {
 
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `${meta.title}!${columnLetter(ACCOUNT_ONBOARDED_COLUMN_INDEX + 1)}${rowNumber}`,
+    range: `${meta.title}!${columnLetter(columnIndex + 1)}${rowNumber}`,
     valueInputOption: 'RAW',
     requestBody: { values: [[value]] },
   })
 }
+
+const setAccountOnboarded = (submission, value) => setManualField(submission, 'accountOnboarded', value)
 
 // Completion Date and Time Taken to Complete Setup are normally manual columns, but once
 // Configuration Status is first observed as COMPLETED the app fills these in automatically —
@@ -260,5 +271,6 @@ module.exports = {
   deleteSubmissionRow,
   getManualStatusMap,
   setAccountOnboarded,
+  setManualField,
   setCompletionInfo,
 }

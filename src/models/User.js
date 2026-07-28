@@ -8,6 +8,7 @@ const userSchema = new Schema(
     googleId: { type: String },
     authProvider: { type: String, enum: ['local', 'google'], required: true },
     avatarUrl: { type: String, default: '' },
+    role: { type: String, enum: ['poc', 'specialist', 'qa', 'admin'], default: 'poc' },
   },
   { timestamps: true },
 )

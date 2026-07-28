@@ -6,5 +6,6 @@ router.use('/submissions', require('./submissionRoutes'))
 router.use('/groups', require('./groupRoutes'))
 router.use('/uploads', require('./uploadRoutes'))
 router.use('/avatar', require('./avatarRoutes'))
+router.use('/admin', require('./adminRoutes'))
 
 module.exports = router

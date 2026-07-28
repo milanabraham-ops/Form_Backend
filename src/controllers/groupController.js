@@ -4,6 +4,10 @@ const { deleteSubmissionRow } = require('../services/sheetSync')
 const { attachManualStatus } = require('../utils/manualStatus')
 const { normalizeStatus, statusEquals } = require('../utils/statusMatch')
 
+// Groups belong to the client relationship, same as submissions — only POC (own) or Admin (any)
+// can create/rename/delete one. Specialist/QA get read-only visibility, same as their submission access.
+const OWNER_ROLES = ['poc', 'admin']
+
 function uniqueValues(list, key) {
   return [...new Set(list.map((l) => l[key]).filter(Boolean))]
 }
@@ -35,6 +39,8 @@ function rollupAccountOnboarded(locs) {
 
 exports.create = async (req, res, next) => {
   try {
+    if (!OWNER_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Forbidden' })
+
     const clientName = (req.body.clientName || '').trim()
     if (!clientName) return res.status(400).json({ error: 'Client name is required' })
 
@@ -48,8 +54,12 @@ exports.create = async (req, res, next) => {
 
 exports.list = async (req, res, next) => {
   try {
-    const groups = await Group.find({ owner: req.user._id }).sort({ createdAt: -1 })
-    const locations = await Submission.find({ owner: req.user._id, group: { $ne: null } })
+    const isOwnerScoped = req.user.role === 'poc'
+    const groupFilter = isOwnerScoped ? { owner: req.user._id } : {}
+    const locationFilter = isOwnerScoped ? { owner: req.user._id, group: { $ne: null } } : { group: { $ne: null } }
+
+    const groups = await Group.find(groupFilter).sort({ createdAt: -1 })
+    const locations = await Submission.find(locationFilter)
     const merged = await attachManualStatus(Submission, locations)
 
     const now = new Date()
@@ -86,10 +96,15 @@ exports.list = async (req, res, next) => {
 
 exports.getById = async (req, res, next) => {
   try {
-    const group = await Group.findOne({ _id: req.params.id, owner: req.user._id })
+    const isOwnerScoped = req.user.role === 'poc'
+    const groupFilter = isOwnerScoped ? { _id: req.params.id, owner: req.user._id } : { _id: req.params.id }
+    const group = await Group.findOne(groupFilter)
     if (!group) return res.status(404).json({ error: 'Group not found' })
 
-    const locations = await Submission.find({ group: group._id, owner: req.user._id }).sort({ createdAt: -1 })
+    const locationFilter = isOwnerScoped
+      ? { group: group._id, owner: req.user._id }
+      : { group: group._id }
+    const locations = await Submission.find(locationFilter).sort({ createdAt: -1 })
     const merged = await attachManualStatus(Submission, locations)
     res.json({ ...group.toObject(), locations: merged })
   } catch (err) {
@@ -100,7 +115,10 @@ exports.getById = async (req, res, next) => {
 
 exports.update = async (req, res, next) => {
   try {
-    const group = await Group.findOne({ _id: req.params.id, owner: req.user._id })
+    if (!OWNER_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Forbidden' })
+
+    const filter = req.user.role === 'poc' ? { _id: req.params.id, owner: req.user._id } : { _id: req.params.id }
+    const group = await Group.findOne(filter)
     if (!group) return res.status(404).json({ error: 'Group not found' })
 
     const clientName = (req.body.clientName || '').trim()
@@ -118,11 +136,15 @@ exports.update = async (req, res, next) => {
 
 exports.remove = async (req, res, next) => {
   try {
-    const group = await Group.findOne({ _id: req.params.id, owner: req.user._id })
+    if (!OWNER_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Forbidden' })
+
+    const filter = req.user.role === 'poc' ? { _id: req.params.id, owner: req.user._id } : { _id: req.params.id }
+    const group = await Group.findOne(filter)
     if (!group) return res.status(404).json({ error: 'Group not found' })
 
-    const locations = await Submission.find({ group: group._id, owner: req.user._id })
-    await Submission.deleteMany({ group: group._id, owner: req.user._id })
+    const locationFilter = req.user.role === 'poc' ? { group: group._id, owner: req.user._id } : { group: group._id }
+    const locations = await Submission.find(locationFilter)
+    await Submission.deleteMany(locationFilter)
     await Group.deleteOne({ _id: group._id })
     res.status(204).end()
 

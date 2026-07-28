@@ -6,7 +6,7 @@ const { signToken } = require('../utils/jwt')
 const googleClient = new OAuth2Client(process.env.GOOGLE_OAUTH_CLIENT_ID)
 
 function toPublicUser(user) {
-  return { id: user._id, name: user.name, email: user.email, avatarUrl: user.avatarUrl || '' }
+  return { id: user._id, name: user.name, email: user.email, avatarUrl: user.avatarUrl || '', role: user.role || 'poc' }
 }
 
 exports.register = async (req, res, next) => {
