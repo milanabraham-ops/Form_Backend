@@ -36,24 +36,48 @@ function audioColumns(field, label) {
   return [{ header: label, get: (s) => audioValue(s[`${field}Type`], s[`${field}Script`], s[`${field}File`]) }]
 }
 
+// A location can have several independent ring groups, so every Step 5 column summarizes
+// across all of them as "RG1: value | RG2: value" rather than a single flat value — groups
+// with nothing to show for that particular field are left out rather than padded with "—".
+const QUEUE_KEY_BY_VALUE = { 'Dial & Exit': 'exit', 'Dial & Queue': 'dq', 'Queue only': 'qo' }
+
+function ringGroupsColumn(getValue) {
+  return (s) =>
+    (s.ringGroups || [])
+      .map((g, i) => {
+        const v = getValue(g)
+        return v ? `RG${i + 1}: ${v}` : null
+      })
+      .filter(Boolean)
+      .join(' | ')
+}
+
+// Same, but only for ring groups actually using the given queue type — a "Dial & Exit" column
+// stays blank for a ring group configured as "Queue only", etc.
+function ringGroupsQueueColumn(queueKey, getValue) {
+  return ringGroupsColumn((g) => (QUEUE_KEY_BY_VALUE[g.queueType] === queueKey ? getValue(g.queue[queueKey]) : null))
+}
+
 // "Dial & Exit" only ever shows an On-Hold Audio field in the form — unlike "Dial & Queue" and
 // "Queue Only", it never renders the queue-detail fields (duration, callers, announcement, exit
 // type/key, exit voicemail), so those columns would always be blank for it. onHoldOnly skips them.
 function queueColumns(key, label, { onHoldOnly = false } = {}) {
-  const q = (s) => s.queue && s.queue[key]
   const onHoldColumn = {
     header: `${label} - On-Hold Audio`,
-    get: (s) => audioValue(q(s)?.onholdType, q(s)?.onholdScript, q(s)?.onholdFile),
+    get: ringGroupsQueueColumn(key, (q) => audioValue(q.onholdType, q.onholdScript, q.onholdFile)),
   }
   if (onHoldOnly) return [onHoldColumn]
   return [
     onHoldColumn,
-    { header: `${label} - Max Queue Duration (s)`, get: (s) => q(s)?.maxDuration || '' },
-    { header: `${label} - Max Callers in Queue`, get: (s) => q(s)?.maxCallers || '' },
-    { header: `${label} - Queue Announcement Type`, get: (s) => (q(s)?.announcement || []).join(', ') },
-    { header: `${label} - Queue Exit Type`, get: (s) => q(s)?.exitType || '' },
-    { header: `${label} - Key to Activate Exit`, get: (s) => q(s)?.exitKey || '' },
-    { header: `${label} - Exit Voicemail Audio`, get: (s) => audioValue(undefined, q(s)?.exitScript, q(s)?.exitFile) },
+    { header: `${label} - Max Queue Duration (s)`, get: ringGroupsQueueColumn(key, (q) => q.maxDuration || '') },
+    { header: `${label} - Max Callers in Queue`, get: ringGroupsQueueColumn(key, (q) => q.maxCallers || '') },
+    { header: `${label} - Queue Announcement Type`, get: ringGroupsQueueColumn(key, (q) => (q.announcement || []).join(', ')) },
+    { header: `${label} - Queue Exit Type`, get: ringGroupsQueueColumn(key, (q) => q.exitType || '') },
+    { header: `${label} - Key to Activate Exit`, get: ringGroupsQueueColumn(key, (q) => q.exitKey || '') },
+    {
+      header: `${label} - Exit Voicemail Audio`,
+      get: ringGroupsQueueColumn(key, (q) => audioValue(undefined, q.exitScript, q.exitFile)),
+    },
   ]
 }
 
@@ -93,18 +117,18 @@ const COLUMNS = [
   ...audioColumns('ahvm', 'After Hours Voicemail Audio'),
   ...audioColumns('bhvm', 'Busy Hours Voicemail Audio'),
 
-  // Step 5 — Ring / Queue
-  { header: 'Ring Type?', get: (s) => s.ringType || '' },
-  { header: 'Ring Duration? (in seconds)', get: (s) => s.ringDuration || '' },
-  { header: 'List of Users/Extensions in Ring Group', get: (s) => s.ringGroupUsers || '' },
-  { header: 'List of Users/Extensions in Shared Voicemail Group', get: (s) => s.svmUsers || '' },
-  { header: 'Voicemail to Email Notification?', get: (s) => s.vmEmail || '' },
-  { header: 'Voicemail Email Addresses', get: (s) => s.vmEmailAddresses || '' },
-  { header: 'Call Queue Type?', get: (s) => s.queueType || '' },
+  // Step 5 — Ring / Queue (each column summarizes across every ring group on the location)
+  { header: 'Ring Type?', get: ringGroupsColumn((g) => g.ringType) },
+  { header: 'Ring Duration? (in seconds)', get: ringGroupsColumn((g) => g.ringDuration) },
+  { header: 'List of Users/Extensions in Ring Group', get: ringGroupsColumn((g) => g.ringGroupUsers) },
+  { header: 'List of Users/Extensions in Shared Voicemail Group', get: ringGroupsColumn((g) => g.svmUsers) },
+  { header: 'Voicemail to Email Notification?', get: ringGroupsColumn((g) => g.vmEmail) },
+  { header: 'Voicemail Email Addresses', get: ringGroupsColumn((g) => g.vmEmailAddresses) },
+  { header: 'Call Queue Type?', get: ringGroupsColumn((g) => g.queueType) },
   ...queueColumns('exit', 'Dial & Exit', { onHoldOnly: true }),
   ...queueColumns('dq', 'Dial & Queue'),
   ...queueColumns('qo', 'Queue Only'),
-  { header: 'Auto Dial (Queue Only)', get: (s) => s.autoDial || '' },
+  { header: 'Auto Dial (Queue Only)', get: ringGroupsColumn((g) => (QUEUE_KEY_BY_VALUE[g.queueType] === 'qo' ? g.autoDial : null)) },
 
   // Step 6 — Devices
   { header: 'Device Line Keys', get: (s) => s.lineKeys || '' },

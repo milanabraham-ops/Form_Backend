@@ -7,5 +7,7 @@ router.use('/groups', require('./groupRoutes'))
 router.use('/uploads', require('./uploadRoutes'))
 router.use('/avatar', require('./avatarRoutes'))
 router.use('/admin', require('./adminRoutes'))
+router.use('/stats', require('./statsRoutes'))
+router.use('/qa-checklist-items', require('./qaChecklistRoutes'))
 
 module.exports = router

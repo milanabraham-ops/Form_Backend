@@ -4,39 +4,38 @@ const {
   appendSubmissionRow,
   updateSubmissionRow,
   deleteSubmissionRow,
-  getManualStatusMap,
   setAccountOnboarded,
   setManualField,
 } = require('../services/sheetSync')
 const { attachManualStatus } = require('../utils/manualStatus')
-const { statusEquals } = require('../utils/statusMatch')
+const { statusEquals, normalizeStatus } = require('../utils/statusMatch')
+const { sendNewRequestEmail } = require('../services/emailService')
+const { notifyNewRequest, notifyQATeamHandoff, notifyPocCompleted } = require('../services/chatService')
 
 // Roles that manage the client relationship itself (creating/deleting submissions and groups).
 // Specialist/QA only ever act on tracking fields of records that already exist.
 const OWNER_ROLES = ['poc', 'admin']
+// QA can also pick up and perform configuration work themselves (same fields as specialist),
+// in addition to their own verification/onboarding sign-off — specialist cannot do QA's part.
 const TRACKING_FIELDS_BY_ROLE = {
-  specialist: ['configurationStatus', 'implementationSpecialist'],
-  qa: ['accountOnboarded'],
+  specialist: ['configurationStatus', 'implementationSpecialist', 'statusBeforeHold'],
+  qa: ['configurationStatus', 'implementationSpecialist', 'accountOnboarded', 'qaAgent', 'statusBeforeHold', 'qaChecklist'],
 }
 const MANUAL_TRACKING_FIELDS = ['accountOnboarded', 'configurationStatus', 'implementationSpecialist']
 
 // Account Onboarded is a property of the client account as a whole, not each individual location —
 // once any location in a group has been closed out, the account is onboarded for good. So a new
-// location added afterward should immediately show CLOSED too, instead of starting blank.
+// location added afterward should immediately show Closed too, instead of starting blank.
 async function inheritOnboardedStatus(submission, groupId) {
   const siblings = await Submission.find({ group: groupId, _id: { $ne: submission._id } })
   if (siblings.length === 0) return
 
-  const statusMap = await getManualStatusMap().catch(() => new Map())
-  const alreadyOnboarded = siblings.some((s) => {
-    const live = statusMap.get(String(s._id))
-    return statusEquals(live ? live.accountOnboarded : s.accountOnboarded, 'CLOSED')
-  })
+  const alreadyOnboarded = siblings.some((s) => statusEquals(s.accountOnboarded, 'CLOSED'))
   if (!alreadyOnboarded) return
 
-  submission.accountOnboarded = 'CLOSED'
+  submission.accountOnboarded = 'Closed'
   await submission.save()
-  await setAccountOnboarded(submission, 'CLOSED')
+  await setAccountOnboarded(submission, 'Closed')
 }
 
 function stripProtectedFields(body) {
@@ -45,7 +44,7 @@ function stripProtectedFields(body) {
 }
 
 function stripTrackingFields(body) {
-  const { accountOnboarded, configurationStatus, implementationSpecialist, ...rest } = body
+  const { accountOnboarded, configurationStatus, implementationSpecialist, qaAgent, ...rest } = body
   return rest
 }
 
@@ -84,6 +83,14 @@ exports.create = async (req, res, next) => {
       .catch((err) => {
         console.error('Failed to sync submission to Google Sheet:', err.message)
       })
+
+    sendNewRequestEmail(submission).catch((err) => {
+      console.error('Failed to send new-request email:', err.message)
+    })
+
+    notifyNewRequest(submission).catch((err) => {
+      console.error('Failed to send new-request Chat notification:', err.message)
+    })
   } catch (err) {
     if (err.name === 'CastError') return res.status(400).json({ error: 'Invalid group' })
     if (err.name === 'ValidationError') {
@@ -143,6 +150,17 @@ exports.update = async (req, res, next) => {
       setManualField(submission, field, submission[field]).catch((err) => {
         console.error(`Failed to sync ${field} to Google Sheet:`, err.message)
       })
+    }
+
+    // Fires whenever a request explicitly sets configurationStatus to QA/Completed — covers
+    // both the normal handoff/complete actions and resuming a hold back into QA.
+    if (updates.configurationStatus !== undefined) {
+      const newStatus = normalizeStatus(updates.configurationStatus)
+      if (newStatus === 'QA') {
+        notifyQATeamHandoff(submission).catch((err) => console.error('Failed to notify QA team in Chat:', err.message))
+      } else if (newStatus === 'COMPLETED') {
+        notifyPocCompleted(submission).catch((err) => console.error('Failed to notify POC in Chat:', err.message))
+      }
     }
   } catch (err) {
     if (err.name === 'CastError') return res.status(400).json({ error: 'Invalid submission id' })

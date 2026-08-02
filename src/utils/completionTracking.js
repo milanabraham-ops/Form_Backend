@@ -14,15 +14,11 @@ function daysBetween(a, b) {
 // how long the actual setup took. So stamp Completion Date / Time Taken as soon as Configuration
 // Status is first observed at QA (or COMPLETED, in case QA was skipped/missed), not at COMPLETED.
 // `doc.completionDate` doubles as the "already stamped" guard so this only fires once per location.
-// Status casing in the Sheet isn't meaningful (QA / qa / Qa are all the same), hence statusIsOneOf.
-async function stampCompletionIfNeeded(Submission, docs, statusMap) {
+// Status casing isn't meaningful (QA / qa / Qa are all the same), hence statusIsOneOf. MongoDB is
+// the source of truth for configurationStatus — the Sheet is write-only storage, never read back.
+async function stampCompletionIfNeeded(Submission, docs) {
   const now = new Date()
-  const toStamp = docs.filter((doc) => {
-    if (doc.completionDate) return false
-    const live = statusMap.get(String(doc._id))
-    const status = live ? live.configurationStatus : doc.configurationStatus
-    return statusIsOneOf(status, ['QA', 'COMPLETED'])
-  })
+  const toStamp = docs.filter((doc) => !doc.completionDate && statusIsOneOf(doc.configurationStatus, ['QA', 'COMPLETED']))
   if (toStamp.length === 0) return
 
   const ops = toStamp.map((doc) => {

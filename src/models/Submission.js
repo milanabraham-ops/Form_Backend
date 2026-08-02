@@ -9,6 +9,17 @@ const fileRefSchema = new Schema(
   { _id: false },
 )
 
+const qaChecklistItemSchema = new Schema(
+  {
+    item: { type: String, required: true },
+    // '' = not yet reviewed, 'ok' = no issue, 'error' = something's wrong (see note),
+    // 'clarification' = QA has a question about it (see note), 'na' = doesn't apply here.
+    status: { type: String, enum: ['', 'ok', 'error', 'clarification', 'na'], default: '' },
+    note: { type: String, default: '' },
+  },
+  { _id: false },
+)
+
 const queueDetailSchema = new Schema(
   {
     onholdType: { type: String, default: '' },
@@ -21,6 +32,40 @@ const queueDetailSchema = new Schema(
     exitKey: { type: String, default: '' },
     exitScript: { type: String, default: '' },
     exitFile: { type: fileRefSchema, default: () => ({}) },
+  },
+  { _id: false },
+)
+
+// A location can have several independent ring groups, each with its own SVM, voicemail
+// settings, and call queue setup — not one shared config for the whole location.
+const ringGroupSchema = new Schema(
+  {
+    // "Same configuration as previous" copies every field below except ringGroupUsers from the
+    // prior ring group — the one thing that's always allowed to differ is who's actually in the
+    // group. Like sameSvmAsPrevious, the flag only drives the form's UI; every field always
+    // holds its own actual resolved value, so nothing downstream needs to resolve the flag.
+    sameConfigAsPrevious: { type: Boolean, default: false },
+
+    ringType: { type: String, default: '' },
+    ringDuration: { type: String, default: '' },
+    ringGroupUsers: { type: String, default: '' },
+
+    // "Same as previous" copies the prior ring group's SVM users so it doesn't need re-typing
+    // when several ring groups genuinely share one voicemail group — the flag just drives the
+    // form's UI (disables the field); svmUsers itself always holds the actual resolved value,
+    // so nothing downstream (Sheet export, review screen) needs to resolve the flag.
+    sameSvmAsPrevious: { type: Boolean, default: false },
+    svmUsers: { type: String, default: '' },
+
+    vmEmail: { type: String, default: '' },
+    vmEmailAddresses: { type: String, default: '' },
+    queueType: { type: String, default: '' },
+    queue: {
+      exit: { type: queueDetailSchema, default: () => ({}) },
+      dq: { type: queueDetailSchema, default: () => ({}) },
+      qo: { type: queueDetailSchema, default: () => ({}) },
+    },
+    autoDial: { type: String, default: '' },
   },
   { _id: false },
 )
@@ -66,20 +111,8 @@ const submissionSchema = new Schema(
     bhvmScript: { type: String, default: '' },
     bhvmFile: { type: fileRefSchema, default: () => ({}) },
 
-    // Step 5 — Ring / Queue
-    ringType: { type: String, default: '' },
-    ringDuration: { type: String, default: '' },
-    ringGroupUsers: { type: String, default: '' },
-    svmUsers: { type: String, default: '' },
-    vmEmail: { type: String, default: '' },
-    vmEmailAddresses: { type: String, default: '' },
-    queueType: { type: String, default: '' },
-    queue: {
-      exit: { type: queueDetailSchema, default: () => ({}) },
-      dq: { type: queueDetailSchema, default: () => ({}) },
-      qo: { type: queueDetailSchema, default: () => ({}) },
-    },
-    autoDial: { type: String, default: '' },
+    // Step 5 — Ring / Queue (a location can have several independent ring groups)
+    ringGroups: { type: [ringGroupSchema], default: () => [] },
 
     // Step 6 — Devices
     lineKeys: { type: String, default: '' },
@@ -115,6 +148,21 @@ const submissionSchema = new Schema(
     accountOnboarded: { type: String, default: '' },
     configurationStatus: { type: String, default: '' },
     implementationSpecialist: { type: String, default: '' },
+
+    // App-only (not mirrored to the Sheet, which has no matching column) — who on the QA team
+    // actually reviewed this one, so QA members can see their own review history separately from
+    // the shared QA queue.
+    qaAgent: { type: String, default: '' },
+
+    // App-only — the QA reviewer's per-item checklist for this account (Configuration, Phone
+    // Number, Ring Groups, etc). Filled in as part of marking the account Completed; its
+    // errors/clarifications get attached to the completion notification in Chat.
+    qaChecklist: { type: [qaChecklistItemSchema], default: () => [] },
+
+    // App-only — whatever configurationStatus was right before "On Hold" was set, so "Resume"
+    // can restore it exactly (Not Started/In Progress for a specialist-side hold, QA for a
+    // QA-side hold). Cleared back to '' once resumed.
+    statusBeforeHold: { type: String, default: '' },
 
     // Auto-stamped the moment configurationStatus is first observed as COMPLETED — also doubles
     // as the "already stamped" guard so it's only written once.

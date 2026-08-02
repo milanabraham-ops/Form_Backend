@@ -12,20 +12,39 @@ function uniqueValues(list, key) {
   return [...new Set(list.map((l) => l[key]).filter(Boolean))]
 }
 
-// Configuration Status pipeline in the Sheet is: '' (not started) -> 'In progress' -> 'QA' -> 'COMPLETED'.
-// A group's locations tend to move through the pipeline together, so roll them up into a single
-// group-level status: still "In progress" until every location has at least reached QA, "QA" until
-// every location is COMPLETED, and "COMPLETED" only once all of them are. Casing in the Sheet isn't
-// meaningful (QA / qa / Qa are the same), so every lookup goes through normalizeStatus first.
-const STATUS_TIER = { '': 0, 'IN PROGRESS': 1, QA: 2, COMPLETED: 3 }
+// Accepts the raw request value for expectedLocationCount and returns either a positive integer,
+// null (explicitly cleared), or undefined (not provided at all — leave existing value untouched).
+// Throws a string error message on an invalid non-empty value.
+function parseExpectedLocationCount(raw) {
+  if (raw === undefined) return undefined
+  if (raw === null || raw === '') return null
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 1) throw new Error('Expected location count must be a positive whole number')
+  return n
+}
+
+// Configuration Status pipeline in the Sheet is: Not Taken -> Not Started -> In Progress -> QA ->
+// Completed, with On Hold a pause reachable from either In Progress or QA. A group's locations
+// tend to move through the pipeline together, so roll them up into a single group-level status:
+// still "In progress" until every location has at least reached QA, "QA" until every location is
+// Completed, and "Completed" only once all of them are. Casing in the Sheet isn't meaningful
+// (QA / qa / Qa are the same), so every lookup goes through normalizeStatus first.
+const STATUS_TIER = { '': 0, 'NOT TAKEN': 0, 'NOT STARTED': 0, 'IN PROGRESS': 1, QA: 2, COMPLETED: 3 }
+
+// On Hold carries no tier of its own — it's a pause on top of whichever stage it was paused
+// from (statusBeforeHold), so the rollup treats a held location as still sitting at that stage.
+function tierOf(loc) {
+  const status = normalizeStatus(loc.configurationStatus)
+  if (status === 'ON HOLD') return normalizeStatus(loc.statusBeforeHold) === 'QA' ? 2 : 1
+  return STATUS_TIER[status] ?? 0
+}
 
 function rollupConfigurationStatus(locs) {
   if (locs.length === 0) return ''
-  const tiers = locs.map((l) => STATUS_TIER[normalizeStatus(l.configurationStatus)] ?? 0)
-  const minTier = Math.min(...tiers)
-  if (minTier >= 3) return 'COMPLETED'
+  const minTier = Math.min(...locs.map(tierOf))
+  if (minTier >= 3) return 'Completed'
   if (minTier >= 2) return 'QA'
-  return 'In progress'
+  return 'In Progress'
 }
 
 // Unlike Configuration Status, Account Onboarded is a property of the client account as a whole,
@@ -34,7 +53,7 @@ function rollupConfigurationStatus(locs) {
 // locations are added later (they inherit the account's already-onboarded state).
 function rollupAccountOnboarded(locs) {
   if (locs.length === 0) return ''
-  return locs.some((l) => statusEquals(l.accountOnboarded, 'CLOSED')) ? 'CLOSED' : 'OPEN'
+  return locs.some((l) => statusEquals(l.accountOnboarded, 'CLOSED')) ? 'Closed' : 'Open'
 }
 
 exports.create = async (req, res, next) => {
@@ -44,7 +63,14 @@ exports.create = async (req, res, next) => {
     const clientName = (req.body.clientName || '').trim()
     if (!clientName) return res.status(400).json({ error: 'Client name is required' })
 
-    const group = await Group.create({ clientName, owner: req.user._id })
+    let expectedLocationCount
+    try {
+      expectedLocationCount = parseExpectedLocationCount(req.body.expectedLocationCount) ?? null
+    } catch (err) {
+      return res.status(400).json({ error: err.message })
+    }
+
+    const group = await Group.create({ clientName, owner: req.user._id, expectedLocationCount })
     res.status(201).json(group)
   } catch (err) {
     if (err.name === 'ValidationError') return res.status(400).json({ error: err.message })
@@ -82,6 +108,7 @@ exports.list = async (req, res, next) => {
           mostRecentLocationAt: mostRecent,
           locationsThisMonth: locs.filter((l) => new Date(l.createdAt) >= startOfMonth).length,
           specialists: uniqueValues(locs, 'implementationSpecialist'),
+          qaAgents: uniqueValues(locs, 'qaAgent'),
           markets: uniqueValues(locs, 'market'),
           pocs: uniqueValues(locs, 'poc'),
           configurationStatus: rollupConfigurationStatus(locs),
@@ -121,10 +148,20 @@ exports.update = async (req, res, next) => {
     const group = await Group.findOne(filter)
     if (!group) return res.status(404).json({ error: 'Group not found' })
 
-    const clientName = (req.body.clientName || '').trim()
-    if (!clientName) return res.status(400).json({ error: 'Client name is required' })
+    if (req.body.clientName !== undefined) {
+      const clientName = req.body.clientName.trim()
+      if (!clientName) return res.status(400).json({ error: 'Client name is required' })
+      group.clientName = clientName
+    }
 
-    group.clientName = clientName
+    if (req.body.expectedLocationCount !== undefined) {
+      try {
+        group.expectedLocationCount = parseExpectedLocationCount(req.body.expectedLocationCount)
+      } catch (err) {
+        return res.status(400).json({ error: err.message })
+      }
+    }
+
     await group.save()
     res.json(group)
   } catch (err) {

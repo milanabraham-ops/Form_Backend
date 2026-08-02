@@ -237,39 +237,11 @@ async function setCompletionInfo(submission, completionDate, daysTaken) {
   })
 }
 
-// Reads the current value of the manually-maintained tracking columns (dropdowns the
-// implementation team fills in directly in the sheet) for every row, keyed by Submission ID.
-// These values live only in the sheet and can change at any time — always read fresh,
-// never cache, and never assume a fixed set of possible values.
-async function getManualStatusMap() {
-  if (!isConfigured()) return new Map()
-
-  const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID
-  const sheets = getClient()
-  const meta = await getSheetMeta(sheets, spreadsheetId)
-  const lastCol = columnLetter(HEADER_ROW.length)
-  const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${meta.title}!A2:${lastCol}` })
-  const rows = res.data.values || []
-
-  const map = new Map()
-  for (const row of rows) {
-    const id = row[ID_COLUMN_INDEX]
-    if (!id) continue
-    map.set(id, {
-      accountOnboarded: row[ACCOUNT_ONBOARDED_COLUMN_INDEX] || '',
-      configurationStatus: row[CONFIGURATION_STATUS_COLUMN_INDEX] || '',
-      implementationSpecialist: row[IMPLEMENTATION_SPECIALIST_COLUMN_INDEX] || '',
-    })
-  }
-  return map
-}
-
 module.exports = {
   ensureHeaderRow,
   appendSubmissionRow,
   updateSubmissionRow,
   deleteSubmissionRow,
-  getManualStatusMap,
   setAccountOnboarded,
   setManualField,
   setCompletionInfo,
