@@ -70,7 +70,12 @@ exports.create = async (req, res, next) => {
       return res.status(400).json({ error: err.message })
     }
 
-    const group = await Group.create({ clientName, owner: req.user._id, expectedLocationCount })
+    const group = await Group.create({
+      clientName,
+      owner: req.user._id,
+      expectedLocationCount,
+      isTestData: Boolean(req.user.isTestAccount),
+    })
     res.status(201).json(group)
   } catch (err) {
     if (err.name === 'ValidationError') return res.status(400).json({ error: err.message })

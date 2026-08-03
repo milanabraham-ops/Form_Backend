@@ -13,6 +13,16 @@ function sheetText(value) {
   return value ? `'${value}` : ''
 }
 
+// Sheets' own auto-link detection only kicks in when a cell's ENTIRE value is a bare URL — a
+// script combined with a link ("some text | https://...") never gets linkified that way, so
+// links are wrapped in an explicit HYPERLINK() formula instead. Requires USER_ENTERED (every
+// write path in sheetSync.js already uses it) — under RAW this would show as literal text.
+function hyperlink(url, label) {
+  if (!url) return ''
+  const safeLabel = String(label ?? url).replace(/"/g, '""')
+  return `=HYPERLINK("${url}", "${safeLabel}")`
+}
+
 function fileLink(fileRef) {
   if (!fileRef || !fileRef.fileId) return ''
   const base = process.env.PUBLIC_BASE_URL || 'http://localhost:5000'
@@ -29,7 +39,8 @@ function driveLink(fileRef) {
 function audioValue(type, script, fileRef) {
   if (type === 'Default') return 'Default'
   const link = driveLink(fileRef) || fileLink(fileRef)
-  return [script || '', link].filter(Boolean).join(' | ')
+  if (!link) return script || ''
+  return hyperlink(link, [script || '', link].filter(Boolean).join(' | '))
 }
 
 function audioColumns(field, label) {
@@ -152,8 +163,8 @@ const COLUMNS = [
   { header: 'List of Users with Fax Access', get: (s) => s.faxUsers || '' },
 
   // Step 8 — Links & PMS
-  { header: 'Phone Information Sheet Link', get: (s) => s.phoneSheetLink || '' },
-  { header: 'Questionnaire Link', get: (s) => s.questionnaireLink || '' },
+  { header: 'Phone Information Sheet Link', get: (s) => hyperlink(s.phoneSheetLink, s.phoneSheetLink) },
+  { header: 'Questionnaire Link', get: (s) => hyperlink(s.questionnaireLink, s.questionnaireLink) },
   { header: 'Additional Notes', get: (s) => s.additionalNotes || '' },
   { header: 'PMS System', get: (s) => s.pms || '' },
   { header: 'Server Access Details', get: (s) => s.serverAccess || '' },

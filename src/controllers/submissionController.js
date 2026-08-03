@@ -9,16 +9,17 @@ const {
 } = require('../services/sheetSync')
 const { attachManualStatus } = require('../utils/manualStatus')
 const { statusEquals, normalizeStatus } = require('../utils/statusMatch')
-const { sendNewRequestEmail } = require('../services/emailService')
-const { notifyNewRequest, notifyQATeamHandoff, notifyPocCompleted } = require('../services/chatService')
+const { notifyNewRequest, postToQaGroup, postToPocGroup } = require('../services/chatService')
 
 // Roles that manage the client relationship itself (creating/deleting submissions and groups).
 // Specialist/QA only ever act on tracking fields of records that already exist.
 const OWNER_ROLES = ['poc', 'admin']
 // QA can also pick up and perform configuration work themselves (same fields as specialist),
 // in addition to their own verification/onboarding sign-off — specialist cannot do QA's part.
+// Account Onboarded belongs to whoever is actually doing the account at the time (specialist
+// while configuring, QA during review), not just QA — so both can set it.
 const TRACKING_FIELDS_BY_ROLE = {
-  specialist: ['configurationStatus', 'implementationSpecialist', 'statusBeforeHold'],
+  specialist: ['configurationStatus', 'implementationSpecialist', 'accountOnboarded', 'statusBeforeHold'],
   qa: ['configurationStatus', 'implementationSpecialist', 'accountOnboarded', 'qaAgent', 'statusBeforeHold', 'qaChecklist'],
 }
 const MANUAL_TRACKING_FIELDS = ['accountOnboarded', 'configurationStatus', 'implementationSpecialist']
@@ -38,8 +39,11 @@ async function inheritOnboardedStatus(submission, groupId) {
   await setAccountOnboarded(submission, 'Closed')
 }
 
+// Transient, Chat-message-only fields never persisted to the Submission document itself —
+// stripped here (ahead of fieldsForRole) so this applies uniformly regardless of role, admin
+// included, rather than needing every TRACKING_FIELDS_BY_ROLE list to know to exclude them.
 function stripProtectedFields(body) {
-  const { owner, _id, createdAt, updatedAt, ...rest } = body
+  const { owner, _id, createdAt, updatedAt, pocMessage, qaHandoffMessage, qaResultMessage, isRecheck, ...rest } = body
   return rest
 }
 
@@ -75,7 +79,7 @@ exports.create = async (req, res, next) => {
       if (!group) return res.status(400).json({ error: 'Invalid group' })
     }
 
-    const submission = await Submission.create({ ...body, owner: req.user._id })
+    const submission = await Submission.create({ ...body, owner: req.user._id, isTestData: Boolean(req.user.isTestAccount) })
     res.status(201).json(submission)
 
     appendSubmissionRow(submission)
@@ -84,13 +88,17 @@ exports.create = async (req, res, next) => {
         console.error('Failed to sync submission to Google Sheet:', err.message)
       })
 
-    sendNewRequestEmail(submission).catch((err) => {
-      console.error('Failed to send new-request email:', err.message)
-    })
-
     notifyNewRequest(submission).catch((err) => {
       console.error('Failed to send new-request Chat notification:', err.message)
     })
+
+    // POC's own edited message to their client-facing space — optional (only sent if they
+    // actually wrote/kept one), separate from the fixed bot message to the QA/specialist group.
+    if (req.body.pocMessage && req.body.pocMessage.trim()) {
+      postToPocGroup(req.body.pocMessage.trim()).catch((err) => {
+        console.error('Failed to send new-request Chat message to POC group:', err.message)
+      })
+    }
   } catch (err) {
     if (err.name === 'CastError') return res.status(400).json({ error: 'Invalid group' })
     if (err.name === 'ValidationError') {
@@ -152,19 +160,45 @@ exports.update = async (req, res, next) => {
       })
     }
 
-    // Fires whenever a request explicitly sets configurationStatus to QA/Completed — covers
-    // both the normal handoff/complete actions and resuming a hold back into QA.
+    // Both the QA-handoff note and the QA-result message are composed by whoever triggers the
+    // transition (specialist / QA) and only sent if they actually wrote one — a recheck reopening
+    // back to QA (isRecheck) is silent, since the specialist already got the original handoff
+    // message and doesn't need a second "ready for QA" ping for the same round.
     if (updates.configurationStatus !== undefined) {
       const newStatus = normalizeStatus(updates.configurationStatus)
-      if (newStatus === 'QA') {
-        notifyQATeamHandoff(submission).catch((err) => console.error('Failed to notify QA team in Chat:', err.message))
-      } else if (newStatus === 'COMPLETED') {
-        notifyPocCompleted(submission).catch((err) => console.error('Failed to notify POC in Chat:', err.message))
+      if (newStatus === 'QA' && !req.body.isRecheck && req.body.qaHandoffMessage && req.body.qaHandoffMessage.trim()) {
+        postToQaGroup(req.body.qaHandoffMessage.trim()).catch((err) => console.error('Failed to notify QA team in Chat:', err.message))
+      } else if (newStatus === 'COMPLETED' && req.body.qaResultMessage && req.body.qaResultMessage.trim()) {
+        postToQaGroup(req.body.qaResultMessage.trim()).catch((err) => console.error('Failed to send QA result to Chat:', err.message))
       }
     }
   } catch (err) {
     if (err.name === 'CastError') return res.status(400).json({ error: 'Invalid submission id' })
     if (err.name === 'ValidationError') return res.status(400).json({ error: err.message })
+    next(err)
+  }
+}
+
+// A deliberate, separate step from marking Completed — QA may want to hold off telling the
+// client right away, and may go through one or more recheck rounds first. QA/admin only, same
+// as the rest of the QA-side actions.
+exports.handover = async (req, res, next) => {
+  try {
+    if (!['qa', 'admin'].includes(req.user.role)) return res.status(403).json({ error: 'Forbidden' })
+
+    const message = (req.body.message || '').trim()
+    if (!message) return res.status(400).json({ error: 'Message is required' })
+
+    const submission = await Submission.findById(req.params.id)
+    if (!submission) return res.status(404).json({ error: 'Submission not found' })
+
+    submission.pocHandoverAt = new Date()
+    await submission.save()
+    res.json(submission)
+
+    postToPocGroup(message).catch((err) => console.error('Failed to send handover message to Chat:', err.message))
+  } catch (err) {
+    if (err.name === 'CastError') return res.status(400).json({ error: 'Invalid submission id' })
     next(err)
   }
 }

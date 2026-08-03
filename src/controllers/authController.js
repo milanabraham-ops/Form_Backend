@@ -6,7 +6,14 @@ const { signToken } = require('../utils/jwt')
 const googleClient = new OAuth2Client(process.env.GOOGLE_OAUTH_CLIENT_ID)
 
 function toPublicUser(user) {
-  return { id: user._id, name: user.name, email: user.email, avatarUrl: user.avatarUrl || '', role: user.role || 'poc' }
+  return {
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    avatarUrl: user.avatarUrl || '',
+    role: user.role || 'poc',
+    mustChangePassword: Boolean(user.mustChangePassword),
+  }
 }
 
 exports.register = async (req, res, next) => {
@@ -92,6 +99,31 @@ exports.me = async (req, res, next) => {
   try {
     const user = await User.findById(req.user._id)
     if (!user) return res.status(404).json({ error: 'User not found' })
+    res.json({ user: toPublicUser(user) })
+  } catch (err) {
+    next(err)
+  }
+}
+
+// Only path off the forced mustChangePassword state — requires the current password too (not
+// just a valid session token) so a compromised/left-open session can't silently take over the
+// account by changing the password without knowing it.
+exports.changePassword = async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Current and new password are required' })
+    if (newPassword.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters' })
+
+    const user = await User.findById(req.user._id)
+    if (!user || !user.passwordHash) return res.status(400).json({ error: 'Password change is not available for this account' })
+
+    const valid = await bcrypt.compare(currentPassword, user.passwordHash)
+    if (!valid) return res.status(401).json({ error: 'Current password is incorrect' })
+
+    user.passwordHash = await bcrypt.hash(newPassword, 10)
+    user.mustChangePassword = false
+    await user.save()
+
     res.json({ user: toPublicUser(user) })
   } catch (err) {
     next(err)

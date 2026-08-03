@@ -74,6 +74,10 @@ const submissionSchema = new Schema(
   {
     owner: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     group: { type: Schema.Types.ObjectId, ref: 'Group', default: null, index: true },
+    // Stamped true at creation when the owner is a test account — lets test submissions live
+    // alongside real ones in every view (same queues, same stats) while still being identifiable
+    // and bulk-purgeable on their own.
+    isTestData: { type: Boolean, default: false, index: true },
 
     // Step 1 — Account & Location
     clientName: { type: String, required: true, trim: true },
@@ -168,6 +172,11 @@ const submissionSchema = new Schema(
     // as the "already stamped" guard so it's only written once.
     completionDate: { type: Date, default: null },
     daysTakenToComplete: { type: Number, default: null },
+
+    // App-only — set the moment the (separate, deliberate) Handover action posts to the POC's
+    // Chat space. Completed just means QA signed off internally; this is the actual "the client
+    // has been told" moment, since QA may want to hold off announcing it right away.
+    pocHandoverAt: { type: Date, default: null },
   },
   { timestamps: true },
 )
