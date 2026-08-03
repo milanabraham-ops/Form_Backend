@@ -16,28 +16,6 @@ function toPublicUser(user) {
   }
 }
 
-exports.register = async (req, res, next) => {
-  try {
-    const { name, email, password } = req.body
-    if (!name || !email || !password) {
-      return res.status(400).json({ error: 'Name, email, and password are required' })
-    }
-    if (password.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters' })
-    }
-
-    const existing = await User.findOne({ email: email.toLowerCase().trim() })
-    if (existing) return res.status(409).json({ error: 'An account with that email already exists' })
-
-    const passwordHash = await bcrypt.hash(password, 10)
-    const user = await User.create({ name: name.trim(), email, passwordHash, authProvider: 'local' })
-
-    res.status(201).json({ token: signToken(user), user: toPublicUser(user) })
-  } catch (err) {
-    next(err)
-  }
-}
-
 exports.login = async (req, res, next) => {
   try {
     const { email, password } = req.body
@@ -70,23 +48,15 @@ exports.google = async (req, res, next) => {
     const payload = ticket.getPayload()
     if (!payload?.email) return res.status(401).json({ error: 'Invalid Google credential' })
 
+    // Google sign-in never creates an account on its own — only an admin-added user (any
+    // authProvider) can sign in this way, and only for the exact email an admin added.
     let user = await User.findOne({ googleId: payload.sub })
     if (!user) {
       user = await User.findOne({ email: payload.email.toLowerCase() })
-      if (user) {
-        user.googleId = payload.sub
-        if (!user.avatarUrl && payload.picture) user.avatarUrl = payload.picture
-        await user.save()
-      }
-    }
-    if (!user) {
-      user = await User.create({
-        name: payload.name || payload.email,
-        email: payload.email,
-        googleId: payload.sub,
-        authProvider: 'google',
-        avatarUrl: payload.picture || '',
-      })
+      if (!user) return res.status(403).json({ error: 'No account found for this email. Ask an admin to add you first.' })
+      user.googleId = payload.sub
+      if (!user.avatarUrl && payload.picture) user.avatarUrl = payload.picture
+      await user.save()
     }
 
     res.json({ token: signToken(user), user: toPublicUser(user) })
