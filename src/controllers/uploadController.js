@@ -1,38 +1,48 @@
 const mongoose = require('mongoose')
 const { getBucket } = require('../config/gridfs')
 const { uploadToDrive } = require('../services/driveUpload')
+const { getClient: getDriveClient, isConfigured: isDriveConfigured } = require('../config/googleDrive')
+const { sanitizeFilename } = require('../utils/safeFilename')
 
+// Drive is the primary store for audio uploads — GridFS is only used when Drive isn't
+// configured at all (local/dev without a service account). If Drive IS configured but a
+// specific upload fails (network blip, expired credentials), the upload errors out and asks
+// the user to retry, rather than silently falling back to GridFS and quietly refilling Mongo.
 exports.upload = async (req, res, next) => {
   if (!req.file) return res.status(400).json({ error: 'No file provided' })
 
+  const filename = sanitizeFilename(req.file.originalname)
+
+  if (isDriveConfigured()) {
+    try {
+      const drive = await uploadToDrive(req.file.buffer, filename, req.file.mimetype, req.body.practiceName, req.body.locationName)
+      return res.status(201).json({
+        driveFileId: drive.fileId,
+        filename,
+        contentType: req.file.mimetype,
+        size: req.file.size,
+        driveUrl: drive.url,
+      })
+    } catch (err) {
+      console.error('Drive upload failed:', err.message)
+      return res.status(502).json({ error: 'Failed to upload file. Please try again.' })
+    }
+  }
+
   try {
     const bucket = getBucket()
-    const uploadStream = bucket.openUploadStream(req.file.originalname, {
+    const uploadStream = bucket.openUploadStream(filename, {
       contentType: req.file.mimetype,
     })
 
     uploadStream.on('error', next)
-    uploadStream.on('finish', async () => {
-      let driveUrl = ''
-      try {
-        const drive = await uploadToDrive(
-          req.file.buffer,
-          req.file.originalname,
-          req.file.mimetype,
-          req.body.practiceName,
-          req.body.locationName,
-        )
-        if (drive) driveUrl = drive.url
-      } catch (err) {
-        console.error('Failed to copy upload to Google Drive:', err.message)
-      }
-
+    uploadStream.on('finish', () => {
       res.status(201).json({
         fileId: uploadStream.id,
-        filename: req.file.originalname,
+        filename,
         contentType: req.file.mimetype,
         size: req.file.size,
-        driveUrl,
+        driveUrl: '',
       })
     })
 
@@ -42,6 +52,8 @@ exports.upload = async (req, res, next) => {
   }
 }
 
+// GridFS-only — used solely to serve files uploaded through the dev fallback path above.
+// Drive-stored files are linked directly via their own driveUrl instead of going through here.
 exports.stream = async (req, res, next) => {
   const { id } = req.params
   if (!mongoose.isValidObjectId(id)) return res.status(400).json({ error: 'Invalid file id' })
@@ -54,7 +66,7 @@ exports.stream = async (req, res, next) => {
 
     const file = files[0]
     res.set('Content-Type', file.contentType || 'application/octet-stream')
-    res.set('Content-Disposition', `inline; filename="${file.filename}"`)
+    res.set('Content-Disposition', `inline; filename="${sanitizeFilename(file.filename)}"`)
     res.set('Content-Length', file.length)
 
     bucket.openDownloadStream(_id).on('error', next).pipe(res)
@@ -63,17 +75,25 @@ exports.stream = async (req, res, next) => {
   }
 }
 
+// Accepts either a GridFS ObjectId (dev-fallback files) or a Drive file id (everything else) —
+// the two id formats never collide, so which store to delete from is unambiguous.
 exports.remove = async (req, res, next) => {
   const { id } = req.params
-  if (!mongoose.isValidObjectId(id)) return res.status(400).json({ error: 'Invalid file id' })
 
   try {
-    await getBucket().delete(new mongoose.Types.ObjectId(id))
+    if (mongoose.isValidObjectId(id)) {
+      await getBucket().delete(new mongoose.Types.ObjectId(id))
+      return res.status(204).end()
+    }
+
+    if (!isDriveConfigured()) return res.status(400).json({ error: 'Invalid file id' })
+    await getDriveClient().files.delete({ fileId: id, supportsAllDrives: true })
     res.status(204).end()
   } catch (err) {
-    if (err.message && err.message.includes('File not found')) {
+    if (err.message && /file not found/i.test(err.message)) {
       return res.status(404).json({ error: 'File not found' })
     }
+    if (err.code === 404) return res.status(404).json({ error: 'File not found' })
     next(err)
   }
 }

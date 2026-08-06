@@ -1,13 +1,15 @@
 const router = require('express').Router()
 const ctrl = require('../controllers/submissionController')
 const requireAuth = require('../middleware/requireAuth')
+const { validateBody } = require('../middleware/validate')
+const { createSubmissionSchema, updateSubmissionSchema } = require('../validators/submissionValidators')
 
 router.use(requireAuth)
 
-router.post('/', ctrl.create)
+router.post('/', validateBody(createSubmissionSchema), ctrl.create)
 router.get('/', ctrl.list)
 router.get('/:id', ctrl.getById)
-router.patch('/:id', ctrl.update)
+router.patch('/:id', validateBody(updateSubmissionSchema), ctrl.update)
 router.post('/:id/handover', ctrl.handover)
 router.delete('/:id', ctrl.remove)
 

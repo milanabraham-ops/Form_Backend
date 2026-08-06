@@ -16,6 +16,12 @@ const userSchema = new Schema(
     // Full functionality, same as a real account — just tagged so its submissions/groups can be
     // told apart (isTestData) and bulk-purged later without touching real client data.
     isTestAccount: { type: Boolean, default: false },
+    // Bumped on every refresh-token rotation, logout, and password change. A refresh token
+    // embeds the version it was issued at — if it no longer matches, the token is stale (already
+    // rotated away, or the session was deliberately ended) and is rejected. Incrementing this is
+    // how logout/password-change invalidate every outstanding refresh token at once, with no
+    // separate token-storage table needed.
+    refreshTokenVersion: { type: Number, default: 0 },
   },
   { timestamps: true },
 )

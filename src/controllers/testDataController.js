@@ -19,11 +19,6 @@ function fileRefsOf(submission) {
   return refs.filter(Boolean)
 }
 
-function driveFileIdFromUrl(url) {
-  const match = /\/d\/([a-zA-Z0-9_-]+)/.exec(url || '')
-  return match ? match[1] : null
-}
-
 // Wipes every account/location produced by test accounts — Mongo, the uploaded audio (GridFS),
 // the Google Drive backup copies, and the corresponding Sheet rows — without touching anything
 // created by a real account. Test accounts themselves are untouched so they stay reusable.
@@ -46,10 +41,9 @@ exports.purge = async (req, res, next) => {
             if (!/file not found/i.test(err.message || '')) console.error('Failed to delete GridFS file:', err.message)
           }
         }
-        const driveFileId = driveFileIdFromUrl(ref.driveUrl)
-        if (driveFileId && drive) {
+        if (ref.driveFileId && drive) {
           try {
-            await drive.files.delete({ fileId: driveFileId, supportsAllDrives: true })
+            await drive.files.delete({ fileId: ref.driveFileId, supportsAllDrives: true })
             driveFilesDeleted++
           } catch (err) {
             console.error('Failed to delete Drive file:', err.message)

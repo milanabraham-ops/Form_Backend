@@ -1,4 +1,4 @@
-const { verifyToken } = require('../utils/jwt')
+const { verifyAccessToken } = require('../utils/jwt')
 const User = require('../models/User')
 
 module.exports = async function requireAuth(req, res, next) {
@@ -7,7 +7,7 @@ module.exports = async function requireAuth(req, res, next) {
   if (!token) return res.status(401).json({ error: 'Not authenticated' })
 
   try {
-    const payload = verifyToken(token)
+    const payload = verifyAccessToken(token)
     const user = await User.findById(payload.sub)
     if (!user) return res.status(401).json({ error: 'Invalid or expired token' })
     req.user = user

@@ -2,6 +2,7 @@ const router = require('express').Router()
 const multer = require('multer')
 const ctrl = require('../controllers/uploadController')
 const requireAuth = require('../middleware/requireAuth')
+const requireAuthStreaming = require('../middleware/requireAuthStreaming')
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -17,7 +18,7 @@ const upload = multer({
 })
 
 router.post('/', requireAuth, upload.single('file'), ctrl.upload)
-router.get('/:id', ctrl.stream)
+router.get('/:id', requireAuthStreaming, ctrl.stream)
 router.delete('/:id', requireAuth, ctrl.remove)
 
 module.exports = router

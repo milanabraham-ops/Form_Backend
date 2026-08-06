@@ -2,7 +2,11 @@ const { Schema, model } = require('mongoose')
 
 const fileRefSchema = new Schema(
   {
+    // Drive is the primary store now — fileId (GridFS) is only ever set when Drive wasn't
+    // configured at upload time (local/dev fallback). driveFileId is the real Drive file id,
+    // needed to delete the file later; driveUrl is just the human-clickable view/download link.
     fileId: { type: Schema.Types.ObjectId, default: null },
+    driveFileId: { type: String, default: '' },
     filename: { type: String, default: '' },
     driveUrl: { type: String, default: '' },
   },

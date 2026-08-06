@@ -4,11 +4,13 @@ const settingsCtrl = require('../controllers/settingsController')
 const testDataCtrl = require('../controllers/testDataController')
 const requireAuth = require('../middleware/requireAuth')
 const requireRole = require('../middleware/requireRole')
+const { validateBody } = require('../middleware/validate')
+const { createUserSchema } = require('../validators/adminValidators')
 
 router.use(requireAuth, requireRole('admin'))
 
 router.get('/users', ctrl.listUsers)
-router.post('/users', ctrl.createUser)
+router.post('/users', validateBody(createUserSchema), ctrl.createUser)
 router.patch('/users/:id/role', ctrl.updateRole)
 router.delete('/users/:id', ctrl.removeUser)
 

@@ -87,4 +87,34 @@ async function uploadToDrive(buffer, filename, mimeType, practiceName, locationN
   return { fileId: res.data.id, url: res.data.webViewLink }
 }
 
-module.exports = { uploadToDrive }
+const AVATARS_CACHE_KEY = '\0avatars' // NUL prefix can't collide with a real client folder name
+
+async function getOrCreateAvatarsFolder(drive) {
+  const rootFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID
+  let folderId = folderIdCache.get(AVATARS_CACHE_KEY)
+  if (!folderId) {
+    folderId = await getOrCreateSubfolder(drive, rootFolderId, 'Avatars')
+    folderIdCache.set(AVATARS_CACHE_KEY, folderId)
+  }
+  return folderId
+}
+
+// Profile pictures get their own flat folder, separate from the per-client/location layout —
+// there's no practice/location context for an avatar, just the account uploading it.
+async function uploadAvatarToDrive(buffer, filename, mimeType) {
+  if (!isConfigured()) return null
+
+  const drive = getClient()
+  const parentId = await getOrCreateAvatarsFolder(drive)
+
+  const res = await drive.files.create({
+    requestBody: { name: filename, parents: [parentId] },
+    media: { mimeType, body: Readable.from(buffer) },
+    fields: 'id, webViewLink',
+    supportsAllDrives: true,
+  })
+
+  return { fileId: res.data.id, url: res.data.webViewLink }
+}
+
+module.exports = { uploadToDrive, uploadAvatarToDrive }
