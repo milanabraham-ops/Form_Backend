@@ -1,6 +1,6 @@
 const { getBucket } = require('../config/gridfs')
-const { uploadAvatarToDrive } = require('../services/driveUpload')
-const { getClient: getDriveClient, isConfigured: isDriveConfigured } = require('../config/googleDrive')
+const { getClient: getDriveClient } = require('../config/googleDrive')
+const { uploadAvatarToDrive, isConfigured: isDriveConfigured } = require('../services/driveUpload')
 const { sanitizeFilename } = require('../utils/safeFilename')
 
 // Same policy as audio uploads: Drive is primary, GridFS is only a fallback when Drive isn't
@@ -11,14 +11,14 @@ exports.upload = async (req, res, next) => {
   const base = process.env.PUBLIC_BASE_URL || 'http://localhost:5000'
   const filename = sanitizeFilename(req.file.originalname)
 
-  if (isDriveConfigured()) {
-    try {
-      const drive = await uploadAvatarToDrive(req.file.buffer, filename, req.file.mimetype)
+  try {
+    const drive = await uploadAvatarToDrive(req.file.buffer, filename, req.file.mimetype)
+    if (drive) {
       return res.status(201).json({ driveFileId: drive.fileId, url: `${base}/api/avatar/file/${drive.fileId}` })
-    } catch (err) {
-      console.error('Drive avatar upload failed:', err.message)
-      return res.status(502).json({ error: 'Failed to upload photo. Please try again.' })
     }
+  } catch (err) {
+    console.error('Drive avatar upload failed:', err.message)
+    return res.status(502).json({ error: 'Failed to upload photo. Please try again.' })
   }
 
   try {
@@ -40,7 +40,7 @@ exports.upload = async (req, res, next) => {
 // like it did against GridFS — Drive's own webViewLink is an HTML viewer page, not a raw image
 // URL, so it can't be used directly as an <img> source.
 exports.stream = async (req, res, next) => {
-  if (!isDriveConfigured()) return res.status(404).json({ error: 'File not found' })
+  if (!(await isDriveConfigured())) return res.status(404).json({ error: 'File not found' })
 
   try {
     const drive = getDriveClient()

@@ -1,4 +1,5 @@
 const { Schema, model } = require('mongoose')
+const { encrypt, decrypt } = require('../utils/encryption')
 
 const fileRefSchema = new Schema(
   {
@@ -22,6 +23,22 @@ const qaChecklistItemSchema = new Schema(
     note: { type: String, default: '' },
   },
   { _id: false },
+)
+
+const commentSchema = new Schema(
+  {
+    authorId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    authorName: { type: String, required: true },
+    authorRole: { type: String, required: true },
+    text: { type: String, required: true },
+    // Who this specific comment should notify — the POC when a staff member (specialist/qa/
+    // admin) posts, or whichever staff member posted most recently when the POC replies. Kept
+    // per-comment (not derived at read time) so the notification target is fixed at the moment
+    // it's written, and doesn't shift later if a different agent takes over the submission.
+    notifyUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: true },
 )
 
 const queueDetailSchema = new Schema(
@@ -105,6 +122,7 @@ const submissionSchema = new Schema(
     // Step 3 — Call Flow
     phoneTree: { type: String, default: '' },
     callFlow: { type: String, default: '' },
+    afterHoursPhoneTree: { type: String, default: '' },
     afterHoursCondition: { type: String, default: '' },
 
     // Step 4 — Audio
@@ -148,7 +166,16 @@ const submissionSchema = new Schema(
     questionnaireLink: { type: String, default: '' },
     additionalNotes: { type: String, default: '' },
     pms: { type: String, default: '' },
-    serverAccess: { type: String, default: '' },
+    // Real login credentials for the client's PMS system — encrypted at rest (AES-256-GCM) via
+    // this set/get pair, transparent to the rest of the app: assign/read plaintext as normal,
+    // Mongoose handles the ciphertext underneath. Requires `toJSON`/`toObject` getters enabled
+    // below, since Express's res.json() serializes through toJSON().
+    serverAccess: {
+      type: String,
+      default: '',
+      set: (value) => encrypt(value),
+      get: (value) => decrypt(value),
+    },
 
     // Tracking — mirrored from the manually-maintained dropdown columns in the Google Sheet.
     // The sheet is the source of truth; these are a durable backup so the info survives
@@ -181,8 +208,25 @@ const submissionSchema = new Schema(
     // Chat space. Completed just means QA signed off internally; this is the actual "the client
     // has been told" moment, since QA may want to hold off announcing it right away.
     pocHandoverAt: { type: Date, default: null },
+
+    // App-only — stamped the moment a specialist genuinely hands this off to QA (not QA resuming
+    // their own on-hold review, and not a silent recheck reopening). Drives the "new QA request"
+    // notification, separately from createdAt (which only tells you when the location itself was
+    // first submitted, not when it actually became QA's problem).
+    qaHandoffAt: { type: Date, default: null },
+
+    // App-only — a Sheets-comment-style discussion thread on this account. Anyone who can
+    // configure it (specialist/qa/admin) or the POC who owns it can post; everyone with access to
+    // the submission can read the whole log, but only notifyUserId gets alerted per comment.
+    comments: { type: [commentSchema], default: () => [] },
   },
-  { timestamps: true },
+  {
+    timestamps: true,
+    // Needed for serverAccess's getter (decryption) to actually run on the way out — without
+    // this, res.json()/toObject() would return the raw ciphertext instead of the plaintext.
+    toJSON: { getters: true },
+    toObject: { getters: true },
+  },
 )
 
 module.exports = model('Submission', submissionSchema)

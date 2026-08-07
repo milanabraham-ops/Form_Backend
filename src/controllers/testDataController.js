@@ -2,7 +2,8 @@ const mongoose = require('mongoose')
 const Submission = require('../models/Submission')
 const Group = require('../models/Group')
 const { getBucket } = require('../config/gridfs')
-const { getClient: getDriveClient, isConfigured: isDriveConfigured } = require('../config/googleDrive')
+const { getClient: getDriveClient } = require('../config/googleDrive')
+const { isConfigured: isDriveConfigured } = require('../services/driveUpload')
 const { deleteSubmissionRow } = require('../services/sheetSync')
 
 // Every place a submission can hold an uploaded audio file — the three top-level welcome/AHVM/BHVM
@@ -26,7 +27,7 @@ exports.purge = async (req, res, next) => {
   try {
     const submissions = await Submission.find({ isTestData: true })
     const bucket = getBucket()
-    const drive = isDriveConfigured() ? getDriveClient() : null
+    const drive = (await isDriveConfigured()) ? getDriveClient() : null
 
     let filesDeleted = 0
     let driveFilesDeleted = 0

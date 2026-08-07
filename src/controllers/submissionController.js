@@ -68,6 +68,49 @@ function fieldsForRole(role, body) {
   return out
 }
 
+function isMineName(fieldValue, name) {
+  return (fieldValue || '').trim().toLowerCase() === (name || '').trim().toLowerCase()
+}
+
+// Once a submission has reached QA (in QA, paused mid-QA-review, or already Completed by QA),
+// the QA agent is the active owner for status/onboarded edits — including recheck/handover on a
+// Completed one, which are QA actions too. Otherwise it's still the specialist's.
+function isInQaDomain(submission) {
+  if (statusEquals(submission.configurationStatus, 'QA') || statusEquals(submission.configurationStatus, 'Completed')) return true
+  return statusEquals(submission.configurationStatus, 'On Hold') && statusEquals(submission.statusBeforeHold, 'QA')
+}
+
+function activeOwnerName(submission) {
+  return isInQaDomain(submission) ? submission.qaAgent : submission.implementationSpecialist
+}
+
+// Once someone has taken a task, only they can touch it — reassign/release who owns it, or
+// change its status/onboarded fields. Nobody else, admin included, gets to edit someone else's
+// taken submission just by using the dropdown/text field — enforced here too since the UI-only
+// gate can't stop a direct API call. Not yet taken by anyone means there's nothing to protect,
+// so the take-over action itself (claiming an unassigned submission) is unaffected.
+function stripForeignOwnershipEdits(submission, updates, requesterName) {
+  const out = { ...updates }
+  if (out.qaAgent !== undefined && submission.qaAgent && !isMineName(submission.qaAgent, requesterName)) {
+    delete out.qaAgent
+  }
+  if (
+    out.implementationSpecialist !== undefined &&
+    submission.implementationSpecialist &&
+    !isMineName(submission.implementationSpecialist, requesterName)
+  ) {
+    delete out.implementationSpecialist
+  }
+
+  const owner = activeOwnerName(submission)
+  if (owner && !isMineName(owner, requesterName)) {
+    delete out.configurationStatus
+    delete out.accountOnboarded
+    delete out.statusBeforeHold
+  }
+  return out
+}
+
 exports.create = async (req, res, next) => {
   try {
     if (!OWNER_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Forbidden' })
@@ -140,7 +183,7 @@ exports.update = async (req, res, next) => {
     const submission = await Submission.findOne(filter)
     if (!submission) return res.status(404).json({ error: 'Submission not found' })
 
-    const updates = fieldsForRole(req.user.role, req.body)
+    const updates = stripForeignOwnershipEdits(submission, fieldsForRole(req.user.role, req.body), req.user.name)
     if (Object.keys(updates).length === 0) {
       return res.status(403).json({ error: 'You are not allowed to edit this' })
     }
@@ -168,6 +211,10 @@ exports.update = async (req, res, next) => {
       const newStatus = normalizeStatus(updates.configurationStatus)
       if (newStatus === 'QA' && !req.body.isRecheck && req.body.qaHandoffMessage && req.body.qaHandoffMessage.trim()) {
         postToQaGroup(req.body.qaHandoffMessage.trim()).catch((err) => console.error('Failed to notify QA team in Chat:', err.message))
+        // Drives the "new QA request" notification badge/sound — a genuine handoff only (see the
+        // qaHandoffMessage condition above), not QA resuming their own on-hold review or a recheck.
+        submission.qaHandoffAt = new Date()
+        submission.save().catch((err) => console.error('Failed to stamp qaHandoffAt:', err.message))
       } else if (newStatus === 'COMPLETED' && req.body.qaResultMessage && req.body.qaResultMessage.trim()) {
         postToQaGroup(req.body.qaResultMessage.trim()).catch((err) => console.error('Failed to send QA result to Chat:', err.message))
       }
@@ -191,6 +238,9 @@ exports.handover = async (req, res, next) => {
 
     const submission = await Submission.findById(req.params.id)
     if (!submission) return res.status(404).json({ error: 'Submission not found' })
+    if (submission.qaAgent && !isMineName(submission.qaAgent, req.user.name)) {
+      return res.status(403).json({ error: 'Only the QA agent who reviewed this can hand it over' })
+    }
 
     submission.pocHandoverAt = new Date()
     await submission.save()
@@ -199,6 +249,42 @@ exports.handover = async (req, res, next) => {
     postToPocGroup(message).catch((err) => console.error('Failed to send handover message to Chat:', err.message))
   } catch (err) {
     if (err.name === 'CastError') return res.status(400).json({ error: 'Invalid submission id' })
+    next(err)
+  }
+}
+
+// A Sheets-comment-style discussion thread — anyone who can configure this account (specialist/
+// qa/admin) or the POC who owns it can post; everyone with access to the submission can read the
+// whole log. Notification is thread-relative rather than tied to a fixed role: a staff post
+// always notifies the POC, while a POC's reply notifies whichever staff member posted most
+// recently (not necessarily the current specialist/qaAgent, since anyone on the team can weigh in).
+exports.addComment = async (req, res, next) => {
+  try {
+    const filter = req.user.role === 'poc' ? { _id: req.params.id, owner: req.user._id } : { _id: req.params.id }
+    const submission = await Submission.findOne(filter)
+    if (!submission) return res.status(404).json({ error: 'Submission not found' })
+
+    const isStaffAuthor = ['specialist', 'qa', 'admin'].includes(req.user.role)
+    let notifyUserId = null
+    if (isStaffAuthor) {
+      notifyUserId = submission.owner
+    } else {
+      const lastStaffComment = [...submission.comments].reverse().find((c) => c.authorRole !== 'poc')
+      notifyUserId = lastStaffComment ? lastStaffComment.authorId : null
+    }
+
+    submission.comments.push({
+      authorId: req.user._id,
+      authorName: req.user.name,
+      authorRole: req.user.role,
+      text: req.body.text.trim(),
+      notifyUserId,
+    })
+    await submission.save()
+    res.status(201).json(submission)
+  } catch (err) {
+    if (err.name === 'CastError') return res.status(400).json({ error: 'Invalid submission id' })
+    if (err.name === 'ValidationError') return res.status(400).json({ error: err.message })
     next(err)
   }
 }

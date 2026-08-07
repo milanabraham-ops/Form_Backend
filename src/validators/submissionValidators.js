@@ -34,4 +34,8 @@ const updateSubmissionSchema = z
   })
   .passthrough()
 
-module.exports = { createSubmissionSchema, updateSubmissionSchema }
+const addCommentSchema = z.object({
+  text: z.string().trim().min(1, 'Comment text is required').max(2000, 'Comment is too long'),
+})
+
+module.exports = { createSubmissionSchema, updateSubmissionSchema, addCommentSchema }

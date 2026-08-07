@@ -22,8 +22,13 @@ function refreshCookieOptions() {
 
 // Deliberately NOT HttpOnly — the frontend needs to read this out of document.cookie and echo it
 // back as a header on refresh/logout requests (the CSRF "double-submit" check, see middleware/csrf.js).
+// Path is '/' here, NOT '/api/auth' like the refresh cookie — a cookie's Path also gates whether
+// document.cookie can see it at all, evaluated against the CURRENT PAGE's path. The frontend's
+// own pages (/dashboard, /board, ...) never start with /api/auth, so scoping this cookie's path
+// that way would make it invisible to the frontend JS that needs to read it, even though the
+// browser would still correctly attach it to the actual /api/auth/* request.
 function csrfCookieOptions() {
-  return { ...baseCookieOptions(), httpOnly: false, maxAge: 30 * 24 * 60 * 60 * 1000 }
+  return { ...baseCookieOptions(), path: '/', httpOnly: false, maxAge: 30 * 24 * 60 * 60 * 1000 }
 }
 
 module.exports = { REFRESH_COOKIE_NAME, CSRF_COOKIE_NAME, refreshCookieOptions, csrfCookieOptions }

@@ -7,6 +7,12 @@ const settingsSchema = new Schema(
   {
     gchatQaWebhookUrl: { type: String, default: '' },
     gchatPocWebhookUrl: { type: String, default: '' },
+    // The Google Drive folder (Shared Drive id) audio/avatar uploads go into — used to live in
+    // GOOGLE_DRIVE_FOLDER_ID, moved here since an admin swapping drives shouldn't need a deploy.
+    // Defaulted to the drive already in use at the time this moved, so existing deployments keep
+    // working unchanged the moment this ships — Mongoose applies schema defaults for any path
+    // missing on an already-existing document, not just brand new ones.
+    googleDriveFolderId: { type: String, default: '0AO8px7bKarwcUk9PVA' },
   },
   { timestamps: true },
 )

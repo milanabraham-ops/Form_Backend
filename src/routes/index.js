@@ -9,5 +9,6 @@ router.use('/avatar', require('./avatarRoutes'))
 router.use('/admin', require('./adminRoutes'))
 router.use('/stats', require('./statsRoutes'))
 router.use('/qa-checklist-items', require('./qaChecklistRoutes'))
+router.use('/agents', require('./agentRoutes'))
 
 module.exports = router

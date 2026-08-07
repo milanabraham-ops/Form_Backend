@@ -1,21 +1,22 @@
 const mongoose = require('mongoose')
 const { getBucket } = require('../config/gridfs')
-const { uploadToDrive } = require('../services/driveUpload')
-const { getClient: getDriveClient, isConfigured: isDriveConfigured } = require('../config/googleDrive')
+const { getClient: getDriveClient } = require('../config/googleDrive')
+const { uploadToDrive, isConfigured: isDriveConfigured } = require('../services/driveUpload')
 const { sanitizeFilename } = require('../utils/safeFilename')
 
 // Drive is the primary store for audio uploads — GridFS is only used when Drive isn't
-// configured at all (local/dev without a service account). If Drive IS configured but a
-// specific upload fails (network blip, expired credentials), the upload errors out and asks
-// the user to retry, rather than silently falling back to GridFS and quietly refilling Mongo.
+// configured at all (local/dev without a service account, or no folder set yet in Settings).
+// uploadToDrive() itself returns null in exactly that case; anything else it does (a thrown
+// error) means Drive IS configured but the upload failed, which should surface as an error
+// instead of silently falling back to GridFS and quietly refilling Mongo.
 exports.upload = async (req, res, next) => {
   if (!req.file) return res.status(400).json({ error: 'No file provided' })
 
   const filename = sanitizeFilename(req.file.originalname)
 
-  if (isDriveConfigured()) {
-    try {
-      const drive = await uploadToDrive(req.file.buffer, filename, req.file.mimetype, req.body.practiceName, req.body.locationName)
+  try {
+    const drive = await uploadToDrive(req.file.buffer, filename, req.file.mimetype, req.body.practiceName, req.body.locationName)
+    if (drive) {
       return res.status(201).json({
         driveFileId: drive.fileId,
         filename,
@@ -23,10 +24,10 @@ exports.upload = async (req, res, next) => {
         size: req.file.size,
         driveUrl: drive.url,
       })
-    } catch (err) {
-      console.error('Drive upload failed:', err.message)
-      return res.status(502).json({ error: 'Failed to upload file. Please try again.' })
     }
+  } catch (err) {
+    console.error('Drive upload failed:', err.message)
+    return res.status(502).json({ error: 'Failed to upload file. Please try again.' })
   }
 
   try {
@@ -86,7 +87,7 @@ exports.remove = async (req, res, next) => {
       return res.status(204).end()
     }
 
-    if (!isDriveConfigured()) return res.status(400).json({ error: 'Invalid file id' })
+    if (!(await isDriveConfigured())) return res.status(400).json({ error: 'Invalid file id' })
     await getDriveClient().files.delete({ fileId: id, supportsAllDrives: true })
     res.status(204).end()
   } catch (err) {

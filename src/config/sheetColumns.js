@@ -120,6 +120,7 @@ const COLUMNS = [
   // Step 3 — Call Flow
   { header: 'Business Hours Phone Tree', get: (s) => s.phoneTree || '' },
   { header: 'Business Hours Call Flow in Detail', get: (s) => s.callFlow || '' },
+  { header: 'After Hours Phone Tree', get: (s) => s.afterHoursPhoneTree || '' },
   { header: 'After Hours Condition, if any', get: (s) => s.afterHoursCondition || '' },
 
   // Step 4 — Audio
@@ -167,7 +168,10 @@ const COLUMNS = [
   { header: 'Questionnaire Link', get: (s) => hyperlink(s.questionnaireLink, s.questionnaireLink) },
   { header: 'Additional Notes', get: (s) => s.additionalNotes || '' },
   { header: 'PMS System', get: (s) => s.pms || '' },
-  { header: 'Server Access Details', get: (s) => s.serverAccess || '' },
+  // Redacted deliberately — this holds real PMS login credentials, encrypted at rest in Mongo
+  // specifically so they aren't sitting in plaintext anywhere. Pushing the decrypted value into
+  // the Sheet (a much less access-controlled surface than the app itself) would undo that.
+  { header: 'Server Access Details', get: (s) => (s.serverAccess ? '(stored securely in app — not exported)' : '') },
 
   // Tracking — filled manually by the implementation team, not by the form
   { header: 'Completion Date', manual: true, get: () => '' },

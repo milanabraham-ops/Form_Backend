@@ -107,10 +107,17 @@ exports.list = async (req, res, next) => {
       groups.map((g) => {
         const locs = byGroup.get(String(g._id)) || []
         const mostRecent = locs.reduce((latest, l) => (!latest || new Date(l.createdAt) > new Date(latest) ? l.createdAt : latest), null)
+        // Rolled up the same way as mostRecentLocationAt — drives the POC handover notification
+        // for grouped locations, since GET /submissions deliberately excludes them (group: null).
+        const mostRecentHandover = locs.reduce(
+          (latest, l) => (l.pocHandoverAt && (!latest || new Date(l.pocHandoverAt) > new Date(latest)) ? l.pocHandoverAt : latest),
+          null,
+        )
         return {
           ...g.toObject(),
           locationCount: locs.length,
           mostRecentLocationAt: mostRecent,
+          mostRecentHandoverAt: mostRecentHandover,
           locationsThisMonth: locs.filter((l) => new Date(l.createdAt) >= startOfMonth).length,
           specialists: uniqueValues(locs, 'implementationSpecialist'),
           qaAgents: uniqueValues(locs, 'qaAgent'),
